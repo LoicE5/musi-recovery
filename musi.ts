@@ -1,12 +1,9 @@
 import { $ } from "bun";
 import { existsSync } from "node:fs";
+import { findTool, requireTool, installerCommand, checkTool } from "./tools";
 
-function requireTool(name: string, install: string) {
-  if (!Bun.which(name)) throw new Error(`Missing ${name}. Run: ${install}`);
-}
-
-function ipatool(...args: string[]) {
-  return Bun.spawn(["ipatool", ...args], {
+function run(command: string, ...args: string[]) {
+  return Bun.spawn([command, ...args], {
     stdin: "inherit",
     stdout: "inherit",
     stderr: "inherit",
@@ -27,24 +24,20 @@ Run from the folder where you want to save or install Musi.ipa.`);
   if (args.length > 1 || (args.length === 1 && args[0] !== "install")) {
     throw new Error("Unknown arguments. Run: bun musi.ts --help");
   }
-  if (process.platform !== "darwin") throw new Error("This CLI requires macOS.");
-
   if (args[0] === "install") {
     if (!existsSync("Musi.ipa")) throw new Error("Missing Musi.ipa. Run: bun musi.ts");
-    requireTool("idevice_id", "brew install libimobiledevice");
-    requireTool("ideviceinstaller", "brew install ideviceinstaller");
-    const help = await $`ideviceinstaller --help 2>${Bun.stderr}`.text();
-    if (!/^\s*install PATH\b/m.test(help)) {
-      throw new Error("ideviceinstaller 1.2.0+ is required. Run: brew upgrade ideviceinstaller");
-    }
+    const deviceId = requireTool("idevice_id");
+    const installer = requireTool("ideviceinstaller");
+    const help = await $`${installer} --help 2>${Bun.stderr}`.text();
+    const installCommand = installerCommand(help);
 
-    console.log("Connect your iPhone by USB, unlock it, and trust this Mac.");
-    const devices = (await $`idevice_id --list 2>${Bun.stderr}`.text())
+    console.log("Connect your iPhone by USB, unlock it, and trust this computer.");
+    const devices = (await $`${deviceId} --list 2>${Bun.stderr}`.text())
       .trim().split(/\s+/).filter(Boolean);
     if (devices.length !== 1) {
       throw new Error(`Expected exactly one USB device; found ${devices.length}. Connect only your iPhone and retry.`);
     }
-    await $`ideviceinstaller --udid ${devices[0]} install Musi.ipa`;
+    await $`${installer} --udid ${devices[0]} ${installCommand} Musi.ipa`;
     console.log("Installation finished. Open Musi on your iPhone to verify it launches.");
     return;
   }
@@ -53,23 +46,25 @@ Run from the folder where you want to save or install Musi.ipa.`);
   if (existsSync("Musi.download.ipa")) {
     throw new Error("Musi.download.ipa already exists. Move or remove it before retrying.");
   }
-  requireTool("ipatool", "brew install ipatool");
-  requireTool("unzip", "use macOS's built-in unzip");
+  const ipatool = requireTool("ipatool");
+  const unzip = await checkTool("unzip") ? findTool("unzip") : undefined;
+  const zipTool = unzip ?? (await checkTool("7z") ? findTool("7z") : undefined);
+  if (!zipTool) throw new Error("Missing unzip or 7-Zip. Run: bun setup.ts");
 
   console.log("Checking the active Apple ID. It must be the account that previously acquired Musi.");
-  if ((await ipatool("auth", "info")) !== 0) {
-    const loginCode = await ipatool("auth", "login");
+  if ((await run(ipatool, "auth", "info")) !== 0) {
+    const loginCode = await run(ipatool, "auth", "login");
     if (loginCode !== 0) process.exit(loginCode);
-    const infoCode = await ipatool("auth", "info");
+    const infoCode = await run(ipatool, "auth", "info");
     if (infoCode !== 0) process.exit(infoCode);
   }
 
-  const code = await ipatool(
+  const code = await run(ipatool,
     "download", "--app-id", "591560124", "--platform", "iphone",
     "--output", "Musi.download.ipa",
   );
   if (code !== 0) process.exit(code);
-  await $`unzip -t Musi.download.ipa`;
+  await $`${zipTool} ${unzip ? "-t" : "t"} Musi.download.ipa`;
   await $`mv -n Musi.download.ipa Musi.ipa`;
   if (existsSync("Musi.download.ipa")) throw new Error("Musi.ipa already exists; download kept as Musi.download.ipa.");
   console.log("Saved Musi.ipa. To install over USB, run: bun musi.ts install");

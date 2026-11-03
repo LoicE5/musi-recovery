@@ -1,3 +1,4 @@
 *.ipa
 *.tmp
 .DS_Store
+.tools/
