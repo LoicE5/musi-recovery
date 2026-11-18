@@ -2,6 +2,16 @@
 
 A small Bun script to try downloading Musi (App Store ID `591560124`) with your own Apple ID, then install it over USB. No npm dependencies, bundled runtime, or compiled app.
 
+## Windows quick start
+
+1. On an x64 Windows 10 or 11 PC, install [Bun](https://bun.sh/docs/installation), [Apple Devices](https://apps.microsoft.com/detail/9np83lwlpz9k) from the Microsoft Store, and [7-Zip x64](https://www.7-zip.org/) in its default folder.
+2. Right-click the project ZIP and choose **Extract All**. Open the extracted folder and double-click **Start Musi Recovery.cmd**. For a fresh sign-in test, use a Windows profile without an active `ipatool` sign-in.
+3. Use your own Apple Account that previously acquired Musi. Enter your password and any two-factor authentication code in the launcher window. If `ipatool` asks for a local keychain passphrase, choose one and reuse it each time it asks.
+4. When the launcher asks, connect only your iPhone by USB, unlock it, and tap **Trust** if prompted. Check that Apple Devices sees the phone and that **Media & Purchases** on the phone uses the same Apple Account. Press a key to start the installation.
+5. **Open Musi on the iPhone.** The pilot passes when a fresh sign-in downloads Musi, the USB installation completes, and Musi opens.
+
+If the download finished and installation failed, keep `Musi.ipa`. After fixing the USB connection, open PowerShell in the extracted folder and run `bun musi.ts install` to retry the installation.
+
 ## Prerequisites
 
 - Install the latest [Bun](https://bun.sh/docs/installation). Bun is required to run all three commands below.

@@ -57,6 +57,26 @@ jobs:
           Set-Content -LiteralPath 'ipa fixture.txt' -Value 'Windows smoke test'
           Compress-Archive -LiteralPath 'ipa fixture.txt' -DestinationPath 'ipa fixture.zip'
           bun tests/windows-ipa-smoke.ts
+      - name: Check the launcher from another folder
+        shell: pwsh
+        run: |
+          $parent = Join-Path $env:RUNNER_TEMP 'Extracted source'
+          $project = Join-Path $parent 'Musi Recovery'
+          $saved = Join-Path $project 'Musi.ipa'
+          Copy-Item -LiteralPath (Join-Path $project 'ipa fixture.zip') -Destination $saved
+          $hash = (Get-FileHash -LiteralPath $saved).Hash
+
+          $launcher = Join-Path $project 'Start Musi Recovery.cmd'
+          $stdout = Join-Path $parent 'launcher.stdout.txt'
+          $stderr = Join-Path $parent 'launcher.stderr.txt'
+          $process = Start-Process -FilePath cmd.exe -ArgumentList "/d /c call `"$launcher`" < NUL" `
+            -WorkingDirectory $parent -RedirectStandardOutput $stdout -RedirectStandardError $stderr -Wait -PassThru
+          $output = Get-Content -LiteralPath $stdout, $stderr
+          $output | Write-Host
+          if ($process.ExitCode -ne 1 -or ($output -join "`n") -notmatch 'Musi\.ipa already exists' -or
+              (Get-FileHash -LiteralPath $saved).Hash -ne $hash) {
+            throw 'The launcher did not stop and preserve the existing IPA.'
+          }
       - name: Record physical test coverage
         if: always()
         shell: pwsh
