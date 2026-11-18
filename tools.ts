@@ -1,8 +1,12 @@
 import { join } from "node:path";
 
 export const toolsDir = join(import.meta.dir, ".tools");
+export const windowsIpatoolVersion = "2.8.1";
 
 export function findTool(name: string) {
+  if (process.platform === "win32" && name === "ipatool") {
+    return Bun.which(join(toolsDir, "ipatool", "ipatool.exe"));
+  }
   const executable = process.platform === "win32" ? `${name}.exe` : name;
   for (const directory of [toolsDir, join(toolsDir, "ipatool"), join(toolsDir, "usb")]) {
     const local = Bun.which(join(directory, executable));
@@ -45,6 +49,9 @@ export async function checkTool(name: string, path = findTool(name)) {
       child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
     ]);
     if (code !== 0) return false;
+    if (process.platform === "win32" && name === "ipatool") {
+      return stdout.trim().match(/^ipatool version v?(\S+)$/)?.[1] === windowsIpatoolVersion;
+    }
     if (name === "ideviceinstaller") installerCommand(stdout + stderr);
     return true;
   } catch {

@@ -1,0 +1,64 @@
+name: Windows smoke test
+
+on: pull_request
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - name: Run Bun tests
+        run: bun test
+      - name: Set up tools and validate an IPA from an extracted ZIP
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $archive = Join-Path $env:RUNNER_TEMP 'musi-recovery.zip'
+          $destination = Join-Path $env:RUNNER_TEMP 'Extracted source'
+          git archive --format=zip --prefix='Musi Recovery/' --output=$archive HEAD
+          Expand-Archive -LiteralPath $archive -DestinationPath $destination
+          Set-Location -LiteralPath (Join-Path $destination 'Musi Recovery')
+
+          $setup = bun setup.ts
+          $setup | Write-Host
+          $log = $setup -join "`n"
+          if ($log -notmatch '(?m)^Setup complete' -or
+              $log -notmatch '(?m)^Downloading .*ipatool-2\.8\.1-windows-amd64\.tar\.gz$' -or
+              $log -notmatch '(?m)^Downloading .*libimobiledevice-win64\.zip$') {
+            throw 'Fresh setup did not download both pinned Windows archives.'
+          }
+
+          $ipatool = '.\.tools\ipatool\ipatool.exe'
+          & $ipatool auth info --help
+          & $ipatool auth login --help
+          $downloadHelp = & $ipatool download --help | Out-String
+          foreach ($flag in '--app-id', '--platform', '--output') {
+            if (!$downloadHelp.Contains($flag)) { throw "ipatool download help is missing $flag." }
+          }
+
+          $rerun = bun setup.ts
+          $rerun | Write-Host
+          $log = $rerun -join "`n"
+          if ($log -notmatch '(?m)^Setup complete' -or $log -match '(?m)^Downloading ') {
+            throw 'Setup did not reuse the installed tools.'
+          }
+
+          Set-Content -LiteralPath 'ipa fixture.txt' -Value 'Windows smoke test'
+          Compress-Archive -LiteralPath 'ipa fixture.txt' -DestinationPath 'ipa fixture.zip'
+          bun tests/windows-ipa-smoke.ts
+      - name: Record physical test coverage
+        if: always()
+        shell: pwsh
+        run: |
+          'This job checks the Windows USB executables with --help. Apple Devices, USB detection and trust, and installation and launch on an iPhone require a physical test. Apple Account sign-in and the Musi download also require the pilot.' >> $env:GITHUB_STEP_SUMMARY

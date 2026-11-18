@@ -2,12 +2,11 @@ import { $ } from "bun";
 import { chmod, mkdir, mkdtemp, readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { checkTool, findTool, requireTool, toolsDir } from "./tools";
+import { checkTool, findTool, requireTool, toolsDir, windowsIpatoolVersion } from "./tools";
 
 // Pinned GitHub release assets; hashes checked against release metadata and downloads.
-const ipatoolBase = "https://github.com/majd/ipatool/releases/download/v2.7.0";
 const ipatoolHashes = {
-  "windows-amd64": "b729608716908be287c2e6972f9e8cd05f879810ae5d182fc856c9e57cca0dd5",
+  "windows-amd64": "a8ccd8075bc083f99caa49976997860ba5e0e3e8f76b450360cd805262542e97",
   "linux-amd64": "68372de9743d468296f2dba5b413a3e7df56ad0c85b8d0f4f0f6c9b8b53a54e8",
   "linux-arm64": "133c3fb754bafcd61698ba6047b48096c7033345529f57d7a83d281f8a403c23",
 };
@@ -54,8 +53,10 @@ export async function installIpatool(os: "linux" | "win32", arch: "x64" | "arm64
   checkPlatform(os, arch);
   if (typeof Bun.Archive !== "function") throw new Error("Update Bun from https://bun.sh before running setup (Bun.Archive is required).");
   const platform = `${os === "win32" ? "windows" : os}-${arch === "x64" ? "amd64" : arch}` as keyof typeof ipatoolHashes;
-  const filename = `ipatool-2.7.0-${platform}${os === "win32" ? ".exe" : ""}`;
-  const bytes = await verifiedDownload(`${ipatoolBase}/ipatool-2.7.0-${platform}.tar.gz`, ipatoolHashes[platform]);
+  const version = os === "win32" ? windowsIpatoolVersion : "2.7.0";
+  const asset = `ipatool-${version}-${platform}`;
+  const filename = `${asset}${os === "win32" ? ".exe" : ""}`;
+  const bytes = await verifiedDownload(`https://github.com/majd/ipatool/releases/download/v${version}/${asset}.tar.gz`, ipatoolHashes[platform]);
   const executable = (await new Bun.Archive(bytes).files()).get(`bin/${filename}`);
   if (!executable) throw new Error("Unexpected ipatool archive layout: missing bin/" + filename);
   await mkdir(directory, { recursive: true });

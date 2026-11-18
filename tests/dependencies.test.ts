@@ -16,7 +16,7 @@ afterEach(async () => {
 async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), "musi-dependencies-"));
   temporary.push(directory);
-  for (const name of ["tools.ts", "musi.ts", "setup.ts"]) {
+  for (const name of ["tools.ts", "ipa.ts", "musi.ts", "setup.ts"]) {
     await Bun.write(join(directory, name), Bun.file(join(import.meta.dir, "..", name)));
   }
   return directory;

@@ -1,6 +1,7 @@
 import { $ } from "bun";
 import { existsSync } from "node:fs";
-import { findTool, requireTool, installerCommand, checkTool } from "./tools";
+import { requireTool, installerCommand, checkTool, windowsIpatoolVersion } from "./tools";
+import { requireIpaZipTest, validateAndSaveIpa } from "./ipa";
 
 function run(command: string, ...args: string[]) {
   return Bun.spawn([command, ...args], {
@@ -47,9 +48,10 @@ Run from the folder where you want to save or install Musi.ipa.`);
     throw new Error("Musi.download.ipa already exists. Move or remove it before retrying.");
   }
   const ipatool = requireTool("ipatool");
-  const unzip = await checkTool("unzip") ? findTool("unzip") : undefined;
-  const zipTool = unzip ?? (await checkTool("7z") ? findTool("7z") : undefined);
-  if (!zipTool) throw new Error("Missing unzip or 7-Zip. Run: bun setup.ts");
+  if (process.platform === "win32" && !await checkTool("ipatool", ipatool)) {
+    throw new Error(`Windows requires ipatool ${windowsIpatoolVersion}. Run: bun setup.ts`);
+  }
+  const zipTest = await requireIpaZipTest();
 
   console.log("Checking the active Apple ID. It must be the account that previously acquired Musi.");
   if ((await run(ipatool, "auth", "info")) !== 0) {
@@ -64,9 +66,7 @@ Run from the folder where you want to save or install Musi.ipa.`);
     "--output", "Musi.download.ipa",
   );
   if (code !== 0) process.exit(code);
-  await $`${zipTool} ${unzip ? "-t" : "t"} Musi.download.ipa`;
-  await $`mv -n Musi.download.ipa Musi.ipa`;
-  if (existsSync("Musi.download.ipa")) throw new Error("Musi.ipa already exists; download kept as Musi.download.ipa.");
+  await validateAndSaveIpa(zipTest);
   console.log("Saved Musi.ipa. To install over USB, run: bun musi.ts install");
 }
 
