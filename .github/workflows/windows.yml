@@ -20,14 +20,25 @@ jobs:
           bun-version: 1.4.4
       - name: Run Bun tests
         run: bun test
-      - name: Set up tools and validate an IPA from an extracted ZIP
+      - name: Build and extract the pilot ZIP
+        shell: pwsh
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ((git rev-parse HEAD) -ne $env:PR_HEAD_SHA) { throw 'The checkout does not match the PR head.' }
+          $pilot = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'pilot')
+          $name = "musi-recovery-pilot-$env:PR_HEAD_SHA.zip"
+          $archive = Join-Path $pilot.FullName $name
+          git archive --format=zip --prefix='Musi Recovery/' --output=$archive HEAD
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+          Set-Content -LiteralPath "$archive.sha256" -Value "$hash  $name" -Encoding ascii
+          Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $env:RUNNER_TEMP 'Extracted source')
+      - name: Check fresh setup, reuse, and tool repair in the extracted ZIP
         shell: pwsh
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
-          $archive = Join-Path $env:RUNNER_TEMP 'musi-recovery.zip'
           $destination = Join-Path $env:RUNNER_TEMP 'Extracted source'
-          git archive --format=zip --prefix='Musi Recovery/' --output=$archive HEAD
-          Expand-Archive -LiteralPath $archive -DestinationPath $destination
           Set-Location -LiteralPath (Join-Path $destination 'Musi Recovery')
 
           $setup = bun setup.ts
@@ -54,29 +65,106 @@ jobs:
             throw 'Setup did not reuse the installed tools.'
           }
 
+          $dll = '.\.tools\usb\libimobiledevice-1.0.dll'
+          $usb = '.\.tools\usb\idevice_id.exe'
+          $originalDll = (Get-FileHash -LiteralPath $dll).Hash
+          $originalUsb = (Get-FileHash -LiteralPath $usb).Hash
+          $originalIpatool = (Get-FileHash -LiteralPath $ipatool).Hash
+          [IO.File]::AppendAllText((Resolve-Path -LiteralPath $dll).Path, 'changed DLL')
+          $repair = bun setup.ts
+          $repair | Write-Host
+          if (($repair -join "`n") -notmatch '(?m)^Downloading .*libimobiledevice-win64\.zip$' -or
+              (Get-FileHash -LiteralPath $dll).Hash -ne $originalDll) {
+            throw 'Setup did not reinstall the USB bundle after a DLL changed.'
+          }
+
+          $source = Join-Path $destination 'canary.cs'
+          $canary = Join-Path $destination 'canary.exe'
+          $env:MUSI_TOOL_CANARY = Join-Path $destination 'tool-invoked.txt'
+          @'
+          using System;
+          using System.IO;
+          public class Canary {
+            public static void Main() {
+              File.WriteAllText(Environment.GetEnvironmentVariable("MUSI_TOOL_CANARY"), "Unexpected tool ran");
+              Console.WriteLine("ipatool version 2.8.1");
+            }
+          }
+          '@ | Set-Content -LiteralPath $source -Encoding ascii
+          & "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo "/out:$canary" $source
+          Copy-Item -LiteralPath $canary -Destination $usb -Force
+          Copy-Item -LiteralPath $canary -Destination $ipatool -Force
+          bun setup.ts
+          if ((Test-Path -LiteralPath $env:MUSI_TOOL_CANARY) -or
+              (Get-FileHash -LiteralPath $usb).Hash -ne $originalUsb -or
+              (Get-FileHash -LiteralPath $ipatool).Hash -ne $originalIpatool) {
+            throw 'Setup did not replace changed executables before running probes.'
+          }
+
           Set-Content -LiteralPath 'ipa fixture.txt' -Value 'Windows smoke test'
           Compress-Archive -LiteralPath 'ipa fixture.txt' -DestinationPath 'ipa fixture.zip'
           bun tests/windows-ipa-smoke.ts
-      - name: Check the launcher from another folder
+      - name: Check checksum enforcement and retry from the launcher
         shell: pwsh
         run: |
           $parent = Join-Path $env:RUNNER_TEMP 'Extracted source'
           $project = Join-Path $parent 'Musi Recovery'
           $saved = Join-Path $project 'Musi.ipa'
-          Copy-Item -LiteralPath (Join-Path $project 'ipa fixture.zip') -Destination $saved
+          $fixture = Join-Path $project 'ipa fixture.zip'
+          Copy-Item -LiteralPath $fixture -Destination $saved
           $hash = (Get-FileHash -LiteralPath $saved).Hash
 
           $launcher = Join-Path $project 'Start Musi Recovery.cmd'
+          $stdin = Join-Path $parent 'launcher.stdin.txt'
           $stdout = Join-Path $parent 'launcher.stdout.txt'
           $stderr = Join-Path $parent 'launcher.stderr.txt'
-          $process = Start-Process -FilePath cmd.exe -ArgumentList "/d /c call `"$launcher`" < NUL" `
-            -WorkingDirectory $parent -RedirectStandardOutput $stdout -RedirectStandardError $stderr -Wait -PassThru
-          $output = Get-Content -LiteralPath $stdout, $stderr
-          $output | Write-Host
-          if ($process.ExitCode -ne 1 -or ($output -join "`n") -notmatch 'Musi\.ipa already exists' -or
-              (Get-FileHash -LiteralPath $saved).Hash -ne $hash) {
-            throw 'The launcher did not stop and preserve the existing IPA.'
+          Set-Content -LiteralPath $stdin -Value '' -Encoding ascii
+          $env:MUSI_TOOL_CANARY = Join-Path $parent 'tool-invoked.txt'
+          $canary = Join-Path $parent 'canary.exe'
+          Copy-Item -LiteralPath $canary -Destination (Join-Path $parent 'bun.exe')
+          Copy-Item -LiteralPath $canary -Destination (Join-Path $project 'bun.exe')
+          $decoys = New-Item -ItemType Directory -Path (Join-Path $parent 'path decoys')
+          Copy-Item -LiteralPath $canary -Destination (Join-Path $decoys.FullName '7z.exe')
+          $env:Path = "$($decoys.FullName);$env:Path"
+
+          function Invoke-Launcher {
+            $process = Start-Process -FilePath $env:ComSpec -ArgumentList "/d /c call `"$launcher`"" `
+              -WorkingDirectory $parent -RedirectStandardInput $stdin -RedirectStandardOutput $stdout `
+              -RedirectStandardError $stderr -Wait -PassThru
+            $output = Get-Content -LiteralPath $stdout, $stderr
+            $output | Write-Host
+            if ($process.ExitCode -ne 1 -or (Test-Path -LiteralPath $env:MUSI_TOOL_CANARY)) {
+              throw 'The launcher did not fail cleanly or invoked a decoy tool.'
+            }
+            return $output -join "`n"
           }
+
+          $log = Invoke-Launcher
+          if ($log -notmatch 'Missing Musi\.ipa\.sha256' -or $log -match 'Tap Trust') {
+            throw 'The launcher did not require a checksum before USB pairing.'
+          }
+          Set-Content -LiteralPath "$saved.sha256" -Value ($hash.ToLowerInvariant()) -Encoding ascii
+          [IO.File]::AppendAllText($saved, 'changed IPA')
+          $log = Invoke-Launcher
+          if ($log -notmatch 'Musi\.ipa SHA-256 mismatch' -or $log -match 'Tap Trust') {
+            throw 'The launcher did not reject a changed IPA before USB pairing.'
+          }
+          Copy-Item -LiteralPath $fixture -Destination $saved -Force
+          foreach ($attempt in 1..2) {
+            $log = Invoke-Launcher
+            if ($log -notmatch 'Reusing verified Musi\.ipa\. Skipping Apple Account sign-in\.' -or
+                $log -match 'Sign in with the Apple Account' -or
+                $log -notmatch 'Checking for one USB-connected iPhone' -or
+                (Get-FileHash -LiteralPath $saved).Hash -ne $hash) {
+              throw 'The launcher did not reach USB detection with the verified IPA and skip sign-in.'
+            }
+          }
+      - name: Upload the tested pilot ZIP and SHA-256
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: musi-recovery-pilot-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/pilot/
+          if-no-files-found: error
       - name: Record physical test coverage
         if: always()
         shell: pwsh

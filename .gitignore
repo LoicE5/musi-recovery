@@ -1,4 +1,5 @@
 *.ipa
+/Musi.ipa.sha256
 *.tmp
 .DS_Store
 .tools/

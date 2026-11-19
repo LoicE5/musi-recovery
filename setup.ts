@@ -1,8 +1,8 @@
 import { $ } from "bun";
 import { chmod, mkdir, mkdtemp, readFile, rename, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { checkTool, findTool, requireTool, toolsDir, windowsIpatoolVersion } from "./tools";
+import { checkTool, findTool, requireTool, toolsDir, verifiedIpatool, verifiedWindowsUsb, windowsIpatoolVersion } from "./tools";
 
 // Pinned GitHub release assets; hashes checked against release metadata and downloads.
 const ipatoolHashes = {
@@ -65,7 +65,7 @@ export async function installIpatool(os: "linux" | "win32", arch: "x64" | "arm64
     const target = join(staging, os === "win32" ? "ipatool.exe" : "ipatool");
     await Bun.write(target, executable);
     if (os !== "win32") await chmod(target, 0o755);
-    if (!await checkTool("ipatool", target)) throw new Error("Downloaded ipatool cannot launch on this computer.");
+    if (!await verifiedIpatool(os, arch, staging)) throw new Error("SHA-256 mismatch for the extracted ipatool executable.");
     await rm(join(directory, "ipatool"), { recursive: true, force: true });
     await rename(staging, join(directory, "ipatool"));
   } finally {
@@ -81,12 +81,9 @@ async function installWindowsUsb() {
     const archive = join(staging, "usb.zip");
     const extracted = join(staging, "extracted");
     await Bun.write(archive, bytes);
-    await $`${requireTool("7z")} x -y ${`-o${extracted}`} ${archive}`.quiet();
-    for (const name of ["idevice_id", "ideviceinstaller"]) {
-      if (!await checkTool(name, join(extracted, `${name}.exe`))) {
-        throw new Error(`Downloaded ${name} cannot launch. Install Apple Devices, then retry setup.`);
-      }
-    }
+    const sevenZip = await requireTool("7z");
+    await $`${sevenZip} x -y ${`-o${extracted}`} ${archive}`.cwd(dirname(sevenZip)).quiet();
+    if (!await verifiedWindowsUsb(extracted)) throw new Error("SHA-256 mismatch for the extracted Windows USB bundle.");
     await rm(join(toolsDir, "usb"), { recursive: true, force: true });
     await rename(extracted, join(toolsDir, "usb"));
   } finally {
@@ -100,7 +97,7 @@ async function main() {
   const arch = process.arch;
   console.log(`Detected ${os}/${arch}`);
   checkPlatform(os, arch);
-  const brew = findTool("brew");
+  const brew = await findTool("brew");
   if (os === "darwin" && !brew) {
     throw new Error("Homebrew is required on macOS. Install it using the instructions at https://brew.sh, then rerun bun setup.ts.");
   }
@@ -108,8 +105,8 @@ async function main() {
   if (os === "win32") {
     console.log("Install Apple Devices from https://apps.microsoft.com/detail/9np83lwlpz9k for Apple's USB drivers and service. Open it once and check that it recognizes your iPhone.");
     if (!await checkTool("7z")) throw new Error("Install 7-Zip x64 from https://www.7-zip.org (keep its default folder), then rerun bun setup.ts. It extracts USB tools and checks downloaded IPAs.");
-    if (!await checkTool("ipatool")) await installIpatool(os, arch as "x64");
-    if (!await checkTool("idevice_id") || !await checkTool("ideviceinstaller")) await installWindowsUsb();
+    if (!await findTool("ipatool")) await installIpatool(os, "x64");
+    if (!await verifiedWindowsUsb()) await installWindowsUsb();
   } else {
     let debian = false;
     if (os === "linux") {
@@ -148,7 +145,7 @@ async function main() {
     if (!await checkTool(tool)) missing.push(tool);
   }
   if (!await checkTool("unzip") && !await checkTool("7z")) missing.push("unzip or 7-Zip");
-  if (missing.length) throw new Error(`Tools missing or unable to launch: ${missing.join(", ")}. Repair them and rerun setup; local .tools/ entries take priority over PATH.`);
+  if (missing.length) throw new Error(`Tools missing, changed, or unable to launch: ${missing.join(", ")}. Repair them and rerun setup.`);
   console.log("Setup complete: recovery tools launch successfully. USB drivers/service and iPhone trust still need to work. Next: bun musi.ts");
 }
 

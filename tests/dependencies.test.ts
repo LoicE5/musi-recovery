@@ -2,9 +2,10 @@ import { afterEach, expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, parse } from "node:path";
+import { withWindowsIpatoolState } from "../musi";
 import { checkPlatform, installIpatool, isDebian, verifiedDownload } from "../setup";
-import { checkTool, installerCommand } from "../tools";
+import { checkTool, installerCommand, sha256File } from "../tools";
 
 const temporary: string[] = [];
 const originalFetch = globalThis.fetch;
@@ -58,24 +59,21 @@ test("installer syntax supports both documented versions", () => {
 
 // Shell fixtures exercise POSIX launch/discovery behavior; Windows needs a real host.
 const posixTest = process.platform === "win32" ? test.skip : test;
-posixTest("local discovery precedes PATH, works from another cwd, and creates nothing", async () => {
+posixTest("POSIX discovery uses PATH and ignores an unverified local executable", async () => {
   const directory = await fixture();
   const local = join(directory, ".tools", "ipatool", "ipatool");
   await script(local, 'echo "ipatool version fixture"');
   const onPath = join(directory, "path", "ipatool");
   await script(onPath, "exit 9");
-  const locate = () => Bun.spawn([process.execPath, "-e", `import {findTool} from ${JSON.stringify(join(directory, "tools.ts"))}; console.log(findTool("ipatool"));`], {
+  const locate = () => Bun.spawn([process.execPath, "-e", `import {findTool} from ${JSON.stringify(join(directory, "tools.ts"))}; console.log(await findTool("ipatool"));`], {
     cwd: tmpdir(), env: { ...process.env, PATH: join(directory, "path") }, stdout: "pipe", stderr: "pipe",
   });
   const child = locate();
-  expect((await new Response(child.stdout).text()).trim()).toBe(local);
+  expect((await new Response(child.stdout).text()).trim()).toBe(onPath);
   expect(await child.exited).toBe(0);
   await rm(join(directory, ".tools"), { recursive: true });
-  const fallback = locate();
-  expect((await new Response(fallback.stdout).text()).trim()).toBe(onPath);
-  expect(await fallback.exited).toBe(0);
   const { findTool } = await import(join(directory, "tools.ts"));
-  findTool("certainly-not-a-musi-tool");
+  await findTool("certainly-not-a-musi-tool");
   expect(existsSync(join(directory, ".tools"))).toBe(false);
 });
 
@@ -95,9 +93,10 @@ posixTest("recovery keeps saved IPAs and refuses zero or multiple USB devices", 
   const directory = await fixture();
   const ipa = join(directory, "Musi.ipa");
   await Bun.write(ipa, "saved-ipa");
+  const path = join(directory, "path");
   const run = async (...args: string[]) => {
     const child = Bun.spawn([process.execPath, join(directory, "musi.ts"), ...args], {
-      cwd: directory, stdout: "pipe", stderr: "pipe",
+      cwd: directory, env: { ...process.env, PATH: path }, stdout: "pipe", stderr: "pipe",
     });
     const [code, stdout, stderr] = await Promise.all([
       child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
@@ -105,27 +104,36 @@ posixTest("recovery keeps saved IPAs and refuses zero or multiple USB devices", 
     return { code, output: stdout + stderr };
   };
   expect((await run()).output).toContain("Musi.ipa already exists");
-  await script(join(directory, ".tools", "usb", "ideviceinstaller"), 'if [ "$1" = "--help" ]; then echo "  install PATH  Install app"; else exit 99; fi');
+  expect((await run("install")).output).toContain("Missing Musi.ipa.sha256");
+  await Bun.write(join(directory, "Musi.ipa.sha256"), `${await sha256File(ipa)}\n`);
+  await script(join(path, "ideviceinstaller"), 'if [ "$1" = "--help" ]; then echo "  install PATH  Install app"; else exit 99; fi');
   for (const devices of ["", "phone-a phone-b"]) {
-    await script(join(directory, ".tools", "usb", "idevice_id"), `echo '${devices}'`);
+    await script(join(path, "idevice_id"), `echo '${devices}'`);
     const result = await run("install");
     expect(result.code).toBe(1);
     expect(result.output).toContain("Expected exactly one USB device");
     expect(await Bun.file(ipa).text()).toBe("saved-ipa");
   }
+  await script(join(path, "idevice_id"), 'echo changed > Musi.ipa\necho phone-a');
+  const changedDuringPairing = await run("install");
+  expect(changedDuringPairing.code).toBe(1);
+  expect(changedDuringPairing.output).toContain("Musi.ipa SHA-256 mismatch");
+  const changedBeforePairing = await run("install", "--trusted-ipa");
+  expect(changedBeforePairing.output).toContain("Musi.ipa SHA-256 mismatch");
+  expect(changedBeforePairing.output).not.toContain("Checking for one USB-connected iPhone");
 });
 
 const linuxTest = process.platform === "linux" ? test : test.skip;
 linuxTest("setup reruns reuse launchable tools without downloads or package changes", async () => {
   const directory = await fixture();
+  const path = join(directory, "path");
   for (const [relative, body] of [
-    ["ipatool/ipatool", "echo ipatool-version-fixture"],
-    ["usb/idevice_id", "echo idevice-id-help"],
-    ["usb/ideviceinstaller", 'echo "  install PATH  Install app"'],
+    ["ipatool", "echo ipatool-version-fixture"],
+    ["idevice_id", "echo idevice-id-help"],
+    ["ideviceinstaller", 'echo "  install PATH  Install app"'],
     ["unzip", "echo unzip-version-fixture"],
     ["brew", "exit 99"],
-  ]) await script(join(directory, ".tools", relative), body);
-  const path = join(directory, "path");
+  ]) await script(join(path, relative), body);
   await script(join(path, "dpkg-query"), 'echo "install ok installed"');
   for (let attempt = 0; attempt < 2; attempt++) {
     const child = Bun.spawn([process.execPath, join(directory, "setup.ts")], {
@@ -139,6 +147,51 @@ linuxTest("setup reruns reuse launchable tools without downloads or package chan
     expect(stdout).toContain("Setup complete");
     expect(stdout).not.toContain("Downloading");
     expect(stdout).not.toContain("Proposed command");
+  }
+});
+
+test("pilot state uses a fresh local directory, cleans up, and blocks migration", async () => {
+  const directory = await fixture();
+  const home = join(directory, "home");
+  const root = parse(home).root;
+  const overrides = {
+    HOMEDRIVE: root.slice(0, -1), HOMEPATH: home.slice(root.length - 1),
+    LOCALAPPDATA: directory, XDG_STATE_HOME: join(directory, "external state"), XDG_DATA_HOME: "",
+  };
+  const previous = Object.fromEntries(Object.keys(overrides).map(key => [key, process.env[key]]));
+  Object.assign(process.env, overrides);
+  try {
+    let priorState: string | undefined;
+    for (const fail of [false, true]) {
+      const operation = withWindowsIpatoolState(async env => {
+        const state = env.XDG_STATE_HOME!;
+        expect(dirname(state)).toBe(directory);
+        expect(state).not.toBe(priorState);
+        priorState = state;
+        expect(join(env.HOMEDRIVE || "", env.HOMEPATH || "")).toBe(state);
+        expect(env.XDG_DATA_HOME).toBe(state);
+        await Bun.write(join(state, "fake-session"), "fixture");
+        if (fail) throw new Error("handled download failure");
+      });
+      if (fail) await expect(operation).rejects.toThrow("handled download failure");
+      else await operation;
+      expect(priorState).toBeDefined();
+      expect(existsSync(priorState!)).toBe(false);
+    }
+
+    for (const profile of [join(home, ".ipatool"), join(overrides.XDG_STATE_HOME, "ipatool")]) {
+      await mkdir(profile, { recursive: true });
+      await expect(withWindowsIpatoolState(async () => {
+        throw new Error("sign-in should not run with existing state");
+      })).rejects.toThrow("Use a clean Windows profile");
+      expect(existsSync(profile)).toBe(true);
+      await rm(profile, { recursive: true });
+    }
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   }
 });
 

@@ -1,8 +1,9 @@
 @echo off
-setlocal
+setlocal DisableDelayedExpansion
 
-where /q bun.exe
-if errorlevel 1 (
+set "MUSI_BUN="
+for /f "delims=" %%I in ('""%SystemRoot%\System32\where.exe" $PATH:bun.exe"') do if not defined MUSI_BUN set "MUSI_BUN=%%~fI"
+if not defined MUSI_BUN (
   echo Install Bun from https://bun.sh, then reopen this launcher.
   goto :failed
 )
@@ -13,21 +14,8 @@ if errorlevel 1 (
   goto :failed
 )
 
-bun.exe setup.ts || goto :run_failed
-
-echo.
-echo Use the Apple Account that previously acquired Musi.
-bun.exe musi.ts || goto :run_failed
-
-echo.
-echo Connect only your iPhone with a USB cable and unlock it.
-echo Tap Trust if the iPhone asks whether to trust this computer.
-echo In Apple Devices, check that your iPhone appears.
-echo Use the same Apple Account for Media and Purchases on the iPhone.
-echo Press any key when the iPhone is ready.
-pause >nul
-
-bun.exe musi.ts install || goto :run_failed
+"%MUSI_BUN%" --no-env-file setup.ts || goto :run_failed
+"%MUSI_BUN%" --no-env-file musi.ts --windows-pilot || goto :run_failed
 
 popd
 pause

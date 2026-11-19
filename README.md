@@ -5,12 +5,12 @@ A small Bun script to try downloading Musi (App Store ID `591560124`) with your 
 ## Windows quick start
 
 1. On an x64 Windows 10 or 11 PC, install [Bun](https://bun.sh/docs/installation), [Apple Devices](https://apps.microsoft.com/detail/9np83lwlpz9k) from the Microsoft Store, and [7-Zip x64](https://www.7-zip.org/) in its default folder.
-2. Right-click the project ZIP and choose **Extract All**. Open the extracted folder and double-click **Start Musi Recovery.cmd**. For a fresh sign-in test, use a Windows profile without an active `ipatool` sign-in.
-3. Use your own Apple Account that previously acquired Musi. Enter your password and any two-factor authentication code in the launcher window. If `ipatool` asks for a local keychain passphrase, choose one and reuse it each time it asks.
-4. When the launcher asks, connect only your iPhone by USB, unlock it, and tap **Trust** if prompted. Check that Apple Devices sees the phone and that **Media & Purchases** on the phone uses the same Apple Account. Press a key to start the installation.
+2. Download the pilot artifact from the passing Windows smoke test on the PR. It contains the source ZIP for that commit and its `.sha256` file. Run `Get-FileHash -Algorithm SHA256 -LiteralPath .\musi-recovery-pilot-<commit>.zip` with the actual filename and compare the result to the `.sha256` file. Right-click the source ZIP and choose **Extract All**, then open the extracted folder and double-click **Start Musi Recovery.cmd**. Use a clean Windows profile without existing `ipatool` state.
+3. At the `ipatool` prompts, enter your own Apple Account that previously acquired Musi, its password, and any two-factor authentication code. Choose a separate local keychain passphrase when asked and reuse that passphrase for the rest of this download.
+4. When the launcher asks, connect only your iPhone by USB, unlock it, and tap **Trust** if prompted. Check that Apple Devices sees the phone and that **Media & Purchases** on the phone uses the same Apple Account. Press Enter to start the installation.
 5. **Open Musi on the iPhone.** The pilot passes when a fresh sign-in downloads Musi, the USB installation completes, and Musi opens.
 
-If the download finished and installation failed, keep `Musi.ipa`. After fixing the USB connection, open PowerShell in the extracted folder and run `bun musi.ts install` to retry the installation.
+If the download finished and installation failed, keep `Musi.ipa` and `Musi.ipa.sha256` together. Fix the USB connection and double-click **Start Musi Recovery.cmd** again. The launcher verifies the saved IPA and skips sign-in.
 
 ## Prerequisites
 
@@ -32,16 +32,27 @@ bun musi.ts
 bun musi.ts install
 ```
 
-Setup reuses working tools. Portable downloads go in the gitignored `.tools/` folder beside the scripts. Windows uses the local [ipatool 2.8.1](https://github.com/majd/ipatool/releases/tag/v2.8.1) and replaces older local copies during setup. The portable Linux fallback stays on [ipatool 2.7.0](https://github.com/majd/ipatool/releases/tag/v2.7.0). Setup verifies SHA-256 before extracting portable tools, preserves the DLLs in the [community Windows USB build v2026.5](https://github.com/raise-isayan/libimobiledevice-dist/releases/tag/v2026.5), and checks that the tools launch. Bun reads ipatool's tar.gz archive directly. You can rerun setup after a failed download or installation.
+Portable tools live in the gitignored `.tools/` folder beside the scripts. Windows uses [ipatool 2.8.1](https://github.com/majd/ipatool/releases/tag/v2.8.1), the [community Windows USB build v2026.5](https://github.com/raise-isayan/libimobiledevice-dist/releases/tag/v2026.5), and `7z.exe` from the default `7-Zip` folder under Program Files. Setup verifies the archives before extraction and verifies the extracted `ipatool` and the complete USB bundle, including DLLs, before running them. Rerunning setup replaces changed portable tools. macOS and Linux use system tools. On Debian/Ubuntu without Homebrew, setup can install and verify the pinned [Linux ipatool 2.7.0](https://github.com/majd/ipatool/releases/tag/v2.7.0) fallback.
 
-Download shows the active account and delegates login and 2FA to `ipatool`. Check that this is the account that acquired Musi. The script never purchases an app or handles credentials. To change accounts, run `ipatool auth revoke` (for the portable Windows copy: `.\.tools\ipatool\ipatool.exe auth revoke`; portable Linux: `.tools/ipatool/ipatool auth revoke`), then retry.
+### Sign-in and cleanup
+
+`ipatool` handles Apple Account sign-in, password and 2FA prompts. Check that the displayed account is the one that acquired Musi.
+
+- **Windows.** Each download signs in from a fresh directory under `%LOCALAPPDATA%` and removes that directory when `ipatool` exits, including on a handled failure. `ipatool` can migrate an existing `%HOMEDRIVE%%HOMEPATH%\.ipatool` profile into a new state directory, so use a clean Windows profile if the launcher reports existing state. If the window is forcibly closed, the maintainer can open `%LOCALAPPDATA%` in File Explorer under the tester's Windows profile and delete any `MusiRecovery-ipatool-*` directories left by that run after confirming its `ipatool` process has stopped.
+- **macOS and Linux.** `ipatool` keeps sign-in state between runs. It prefers macOS Keychain or Linux Secret Service where available, with an encrypted file keychain as a fallback. The pinned Linux release stores cookies and file-keychain data in `~/.ipatool` by default, or in `ipatool` under an absolute `$XDG_STATE_HOME` or `$XDG_DATA_HOME` path (in that order, when set). Current macOS builds use the same state layout. Run `ipatool auth revoke` to clear the stored account, or `.tools/ipatool/ipatool auth revoke` for the portable Linux copy. To remove remaining cookies and file state, close `ipatool` and delete its state directory. You can also remove a leftover `ipatool-auth.service` entry in Keychain Access or your Linux keyring manager.
+
+### IPA verification and USB installation
 
 Before the install command, connect **exactly one iPhone by USB**, unlock it, and accept **Trust This Computer**. Sign into **Media & Purchases** on the phone with the downloading Apple ID. Open Musi yourself after installation to verify launch. If detection fails, check Apple Devices on Windows or the distribution's `usbmuxd` service and USB permissions on Linux.
 
-The IPA is validated as a ZIP before being saved as `Musi.ipa` in the current directory. Existing IPAs are preserved: move `Musi.ipa` before downloading again. After a failed download or ZIP check, move or remove `Musi.download.ipa` before retrying. Installation failures leave `Musi.ipa` intact.
+The downloader checks ZIP integrity, saves `Musi.ipa` and `Musi.ipa.sha256` in the current directory, and checks the SHA-256 before USB pairing and again before installation. Move both files before downloading again. After a failed download or ZIP check, move or remove `Musi.download.ipa` before retrying. A downloaded IPA contains your Apple Account identifier. Keep it private and out of the repository and CI artifacts.
+
+For an older `Musi.ipa` you already trust and have no checksum for, run `bun musi.ts install --trusted-ipa` to check its ZIP integrity and install it. The double-click launcher always requires the checksum.
 
 ## Limitations and verification
 
 Apple can deny authorization or remove the download, even if you previously owned Musi. The IPA remains FairPlay-encrypted and requires authorization under the downloading Apple ID ([details](https://github.com/majd/ipatool/issues/251#issuecomment-1863264842)). The maintainer also recommends downloading an App Store app on the phone under that account ([details](https://github.com/majd/ipatool/issues/429#issuecomment-4374681803)). This script does no re-signing or decryption; a successful install does not guarantee launch.
 
-Run `bun test` for the focused checks. The Windows x64 CI job also runs setup twice from a fresh ZIP in a path with spaces, checks the bundled commands, and exercises IPA validation and saving with a small local ZIP. Apple Devices, real sign-in and download, USB installation, and opening Musi still require the physical pilot.
+Run `bun test` for the focused checks. Windows x64 CI verifies fresh setup, repair before tool execution, rejection of a changed IPA, and a USB retry that skips sign-in. The job uploads the exact source-only ZIP it tested, with its SHA-256, in the run's Artifacts section.
+
+On a real Windows x64 PC, use that artifact and the tester's own Apple Account that previously acquired Musi. Record the commit and whether fresh sign-in and 2FA succeeded, the temporary sign-in directory was removed, USB installation finished, and Musi opened on the iPhone. Keep account details and any screenshots or logs containing them off the PR. The earlier Mac run covers the macOS path.
