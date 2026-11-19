@@ -1,37 +1,46 @@
 # Musi recovery
 
-A small Bun script to try downloading Musi (App Store ID `591560124`) using your own Apple ID, then optionally install it over USB. No npm dependencies.
+Download Musi with an Apple Account that previously acquired it, then install it over USB. Apple can still deny the download or authorization.
 
-## Prerequisites and installation
+## Windows quick start
 
-You need macOS, [Homebrew](https://brew.sh), and an Apple ID that previously acquired Musi.
+1. On an x64 Windows 10 or 11 PC, install [Bun](https://bun.sh/docs/installation), [Apple Devices](https://apps.microsoft.com/detail/9np83lwlpz9k) from the Microsoft Store, and [7-Zip x64](https://www.7-zip.org/) in its default folder.
+2. If you need the source ZIP, choose **Code → Download ZIP** on the repository page, then right-click the ZIP in File Explorer and choose **Extract All**. Open the project folder and double-click **Start Musi Recovery.cmd**.
+3. At the `ipatool` prompts, enter your Apple Account, password, and any two-factor authentication code. Choose a separate local keychain passphrase when asked and reuse it for the rest of this download.
+4. When the launcher asks, connect only your iPhone by USB, unlock it, and tap **Trust** if prompted. Check that Apple Devices sees the phone and that **Media & Purchases** on the phone uses the same Apple Account. Press Enter to start the installation.
+5. When installation finishes, **open Musi on the iPhone** to verify it launches.
+
+## Terminal setup
+
+Install the latest [Bun](https://bun.sh/docs/installation) and check the requirements for your platform.
+
+- **Windows x64 (10 or 11)** uses the prerequisites in the quick start above.
+- **macOS (Intel or Apple Silicon)** requires [Homebrew](https://brew.sh). Setup asks before installing missing tools.
+- **Linux (x64 or ARM64)** uses Homebrew when available. On Debian or Ubuntu without Homebrew, setup can install distribution packages and download `ipatool`. Install your distribution's `usbmuxd` service and configure USB permissions as needed. On other distributions without Homebrew, also install `ipatool`, `libimobiledevice` (providing `idevice_id`), `ideviceinstaller` 1.1.1 or newer, and `unzip` or `7z`.
+
+Clone the repository or extract the source ZIP, then open a terminal in the project folder (PowerShell on Windows). Run the commands below in order. Check that `ipatool` uses the account that acquired Musi.
+
+Before running `bun musi.ts install`, connect **exactly one iPhone by USB**, unlock it, and accept **Trust This Computer**. Sign into **Media & Purchases** on the phone with the same Apple Account.
 
 ```sh
-brew install oven-sh/bun/bun ipatool
-# Optional USB installation (ideviceinstaller 1.2.0+):
-brew install ideviceinstaller libimobiledevice
+bun setup.ts
+bun musi.ts
+bun musi.ts install
 ```
 
-## Usage
+Open Musi after installation to verify it launches.
 
-Run from this repository:
+## Troubleshooting
 
-```sh
-bun musi.ts          # Download
-bun musi.ts install  # Install the saved IPA over USB
-bun musi.ts --help
-```
+- **Installation failed after downloading.** Keep `Musi.ipa` and `Musi.ipa.sha256` together. Check Apple Devices on Windows or `usbmuxd` and USB permissions on Linux. Double-click **Start Musi Recovery.cmd** again to skip sign-in, or rerun `bun musi.ts install`.
+- **Downloading again.** Move both saved files first. If a failed download left `Musi.download.ipa`, move or remove it before retrying.
+- **Older IPA without a checksum.** If you already trust the file, run `bun musi.ts install --trusted-ipa`.
+- **Existing `ipatool` profile on Windows.** If the launcher reports one, switch to a Windows user account that has never used `ipatool`.
+- **Forcibly closed the Windows launcher.** Wait for `ipatool` to stop, then open `%LOCALAPPDATA%` in File Explorer and delete any `MusiRecovery-ipatool-*` folders left by that run.
+- **Wrong account on macOS or Linux.** Run `ipatool auth revoke`, or `.tools/ipatool/ipatool auth revoke` for the portable Linux copy, then download again.
 
-Download shows the active account and delegates login and 2FA to `ipatool` when needed. Check that it is the account that acquired Musi. To change accounts, use `ipatool auth revoke` and retry. This script never purchases an app or handles credentials itself.
+A downloaded IPA contains your Apple Account identifier. Keep it private.
 
-The download is checked with `unzip` before becoming `Musi.ipa` in the current directory. Existing files are preserved; move `Musi.ipa` before downloading again. If a download or ZIP check fails, move or remove `Musi.download.ipa` before retrying. Installation failures leave `Musi.ipa` intact.
+## Tests
 
-For installation, connect exactly one iPhone by USB, unlock it, and accept **Trust This Computer**. Sign into **Media & Purchases** on the iPhone with the downloading Apple ID. After installation, open Musi yourself to verify launch.
-
-## Limitations
-
-- Previous ownership does not guarantee recovery. Apple can deny authorization, restrict storefront availability, or remove the download entirely.
-- The IPA remains FairPlay-encrypted and requires device authorization under the downloading Apple ID ([maintainer explanation](https://github.com/majd/ipatool/issues/251#issuecomment-1863264842)). The maintainer also recommends downloading an App Store app on the device under that account ([details](https://github.com/majd/ipatool/issues/429#issuecomment-4374681803)).
-- USB installation can fail, and a successful install does not guarantee launch. This script does no re-signing, decryption, mirror downloads, or automatic account switching.
-
-Command syntax checked against upstream: [`ipatool` 2.7.0 download](https://github.com/majd/ipatool/blob/v2.7.0/cmd/download.go), [authentication](https://github.com/majd/ipatool/blob/v2.7.0/cmd/auth.go), [`ideviceinstaller` 1.2.0](https://github.com/libimobiledevice/ideviceinstaller/blob/1.2.0/man/ideviceinstaller.1), and [`idevice_id --list`](https://github.com/libimobiledevice/libimobiledevice/blob/1.4.0/docs/idevice_id.1).
+Run `bun test`. The Windows workflow run's **Artifacts** section contains the tested source ZIP and its `.sha256` file.
