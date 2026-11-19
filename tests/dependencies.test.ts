@@ -150,7 +150,7 @@ linuxTest("setup reruns reuse launchable tools without downloads or package chan
   }
 });
 
-test("pilot state uses a fresh local directory, cleans up, and blocks migration", async () => {
+test("Windows sign-in uses a fresh local directory, cleans up, and blocks migration", async () => {
   const directory = await fixture();
   const home = join(directory, "home");
   const root = parse(home).root;

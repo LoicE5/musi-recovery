@@ -20,16 +20,16 @@ jobs:
           bun-version: 1.4.4
       - name: Run Bun tests
         run: bun test
-      - name: Build and extract the pilot ZIP
+      - name: Build and extract the source ZIP
         shell: pwsh
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           if ((git rev-parse HEAD) -ne $env:PR_HEAD_SHA) { throw 'The checkout does not match the PR head.' }
-          $pilot = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'pilot')
-          $name = "musi-recovery-pilot-$env:PR_HEAD_SHA.zip"
-          $archive = Join-Path $pilot.FullName $name
+          $artifact = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'source-artifact')
+          $name = "musi-recovery-$env:PR_HEAD_SHA.zip"
+          $archive = Join-Path $artifact.FullName $name
           git archive --format=zip --prefix='Musi Recovery/' --output=$archive HEAD
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
           Set-Content -LiteralPath "$archive.sha256" -Value "$hash  $name" -Encoding ascii
@@ -104,17 +104,14 @@ jobs:
           Set-Content -LiteralPath 'ipa fixture.txt' -Value 'Windows smoke test'
           Compress-Archive -LiteralPath 'ipa fixture.txt' -DestinationPath 'ipa fixture.zip'
           bun tests/windows-ipa-smoke.ts
-      - name: Check checksum enforcement and retry from the launcher
+      - name: Check the launcher from the Git checkout and extracted ZIP
         shell: pwsh
         run: |
           $parent = Join-Path $env:RUNNER_TEMP 'Extracted source'
-          $project = Join-Path $parent 'Musi Recovery'
-          $saved = Join-Path $project 'Musi.ipa'
-          $fixture = Join-Path $project 'ipa fixture.zip'
-          Copy-Item -LiteralPath $fixture -Destination $saved
-          $hash = (Get-FileHash -LiteralPath $saved).Hash
+          $extracted = Join-Path $parent 'Musi Recovery'
+          $fixture = Join-Path $extracted 'ipa fixture.zip'
+          $hash = (Get-FileHash -LiteralPath $fixture).Hash
 
-          $launcher = Join-Path $project 'Start Musi Recovery.cmd'
           $stdin = Join-Path $parent 'launcher.stdin.txt'
           $stdout = Join-Path $parent 'launcher.stdout.txt'
           $stderr = Join-Path $parent 'launcher.stderr.txt'
@@ -122,12 +119,11 @@ jobs:
           $env:MUSI_TOOL_CANARY = Join-Path $parent 'tool-invoked.txt'
           $canary = Join-Path $parent 'canary.exe'
           Copy-Item -LiteralPath $canary -Destination (Join-Path $parent 'bun.exe')
-          Copy-Item -LiteralPath $canary -Destination (Join-Path $project 'bun.exe')
           $decoys = New-Item -ItemType Directory -Path (Join-Path $parent 'path decoys')
           Copy-Item -LiteralPath $canary -Destination (Join-Path $decoys.FullName '7z.exe')
           $env:Path = "$($decoys.FullName);$env:Path"
 
-          function Invoke-Launcher {
+          function Invoke-Launcher([string] $launcher) {
             $process = Start-Process -FilePath $env:ComSpec -ArgumentList "/d /c call `"$launcher`"" `
               -WorkingDirectory $parent -RedirectStandardInput $stdin -RedirectStandardOutput $stdout `
               -RedirectStandardError $stderr -Wait -PassThru
@@ -139,34 +135,42 @@ jobs:
             return $output -join "`n"
           }
 
-          $log = Invoke-Launcher
-          if ($log -notmatch 'Missing Musi\.ipa\.sha256' -or $log -match 'Tap Trust') {
-            throw 'The launcher did not require a checksum before USB pairing.'
-          }
-          Set-Content -LiteralPath "$saved.sha256" -Value ($hash.ToLowerInvariant()) -Encoding ascii
-          [IO.File]::AppendAllText($saved, 'changed IPA')
-          $log = Invoke-Launcher
-          if ($log -notmatch 'Musi\.ipa SHA-256 mismatch' -or $log -match 'Tap Trust') {
-            throw 'The launcher did not reject a changed IPA before USB pairing.'
-          }
-          Copy-Item -LiteralPath $fixture -Destination $saved -Force
-          foreach ($attempt in 1..2) {
-            $log = Invoke-Launcher
-            if ($log -notmatch 'Reusing verified Musi\.ipa\. Skipping Apple Account sign-in\.' -or
-                $log -match 'Sign in with the Apple Account' -or
-                $log -notmatch 'Checking for one USB-connected iPhone' -or
-                (Get-FileHash -LiteralPath $saved).Hash -ne $hash) {
-              throw 'The launcher did not reach USB detection with the verified IPA and skip sign-in.'
+          foreach ($project in @($env:GITHUB_WORKSPACE, $extracted)) {
+            Write-Host "Checking the launcher in $project"
+            $launcher = Join-Path $project 'Start Musi Recovery.cmd'
+            $saved = Join-Path $project 'Musi.ipa'
+            Copy-Item -LiteralPath $canary -Destination (Join-Path $project 'bun.exe')
+            Copy-Item -LiteralPath $fixture -Destination $saved
+
+            $log = Invoke-Launcher $launcher
+            if ($log -notmatch 'Missing Musi\.ipa\.sha256' -or $log -match 'Tap Trust') {
+              throw 'The launcher did not require a checksum before USB pairing.'
+            }
+            Set-Content -LiteralPath "$saved.sha256" -Value ($hash.ToLowerInvariant()) -Encoding ascii
+            [IO.File]::AppendAllText($saved, 'changed IPA')
+            $log = Invoke-Launcher $launcher
+            if ($log -notmatch 'Musi\.ipa SHA-256 mismatch' -or $log -match 'Tap Trust') {
+              throw 'The launcher did not reject a changed IPA before USB pairing.'
+            }
+            Copy-Item -LiteralPath $fixture -Destination $saved -Force
+            foreach ($attempt in 1..2) {
+              $log = Invoke-Launcher $launcher
+              if ($log -notmatch 'Reusing verified Musi\.ipa\. Skipping Apple Account sign-in\.' -or
+                  $log -match 'Sign in with the Apple Account' -or
+                  $log -notmatch 'Checking for one USB-connected iPhone' -or
+                  (Get-FileHash -LiteralPath $saved).Hash -ne $hash) {
+                throw 'The launcher did not reach USB detection with the verified IPA and skip sign-in.'
+              }
             }
           }
-      - name: Upload the tested pilot ZIP and SHA-256
+      - name: Upload the tested source ZIP and SHA-256
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: musi-recovery-pilot-${{ github.event.pull_request.head.sha }}
-          path: ${{ runner.temp }}/pilot/
+          name: musi-recovery-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/source-artifact/
           if-no-files-found: error
-      - name: Record physical test coverage
+      - name: Summarize automated coverage
         if: always()
         shell: pwsh
         run: |
-          'This job checks the Windows USB executables with --help. Apple Devices, USB detection and trust, and installation and launch on an iPhone require a physical test. Apple Account sign-in and the Musi download also require the pilot.' >> $env:GITHUB_STEP_SUMMARY
+          'This job checks tool setup, IPA verification, and USB retry. Verify Apple Account sign-in and download, USB pairing and installation, and app launch on Windows with an iPhone.' >> $env:GITHUB_STEP_SUMMARY

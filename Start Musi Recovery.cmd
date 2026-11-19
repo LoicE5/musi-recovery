@@ -15,7 +15,7 @@ if errorlevel 1 (
 )
 
 "%MUSI_BUN%" --no-env-file setup.ts || goto :run_failed
-"%MUSI_BUN%" --no-env-file musi.ts --windows-pilot || goto :run_failed
+"%MUSI_BUN%" --no-env-file musi.ts --windows-launcher || goto :run_failed
 
 popd
 pause

@@ -118,7 +118,7 @@ async function installIpa(expectedHash: string) {
   console.log("Installation finished. Open Musi on your iPhone to verify it launches.");
 }
 
-async function windowsPilot() {
+async function runWindowsLauncher() {
   if (process.platform !== "win32") throw new Error("The double-click launcher requires Windows.");
   const retry = existsSync(savedIpa);
   if (!retry) await downloadIpa();
@@ -154,8 +154,8 @@ async function main() {
 Run from the folder where you want to save or install Musi.ipa.`);
     return;
   }
-  if (args.length === 1 && args[0] === "--windows-pilot") {
-    await windowsPilot();
+  if (args.length === 1 && args[0] === "--windows-launcher") {
+    await runWindowsLauncher();
     return;
   }
   if (args[0] === "install" && (args.length === 1 || (args.length === 2 && args[1] === "--trusted-ipa"))) {
